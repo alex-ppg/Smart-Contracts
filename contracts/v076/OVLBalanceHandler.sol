@@ -18,7 +18,6 @@ interface IOVLTransferHandler {
 
 contract OVLBalanceHandler {
     using SafeMath for uint256;
-    using SafeMath for uint112;
 
     IDeltaToken immutable DELTA_TOKEN;
     address constant UNISWAP_V2_ROUTER = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;

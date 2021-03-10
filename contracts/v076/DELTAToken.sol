@@ -35,7 +35,6 @@ interface IOVLBalanceHandler {
 
 contract DELTAToken is Context, IERC20 {
     using SafeMath for uint256;
-    using SafeMath for uint112;
     using Address for address;
 
     // shared state begin v0
@@ -59,7 +58,7 @@ contract DELTAToken is Context, IERC20 {
 
     //// WARNIGN
     // THIS CAN NEVER CHANGE EVEN ON UPGRADES
-    uint8 public constant QTY_EPOCHS = 7; // seven transation buckets
+    uint256 public constant QTY_EPOCHS = 7; // seven transation buckets
     uint256 [72] private ____bigGap;
 
     // shared state end of v0
@@ -68,14 +67,14 @@ contract DELTAToken is Context, IERC20 {
     address public governance;
     string private _name;
     string private _symbol;
-    uint8 private _decimals;
+    uint8 private immutable _decimals;
     address public tokenTransferHandler;
     address constant public wethAddress = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     IWETH constant public wETH = IWETH(wethAddress);
-    uint112 TOTAL_INITIAL_SUPPLY = 45000000e18;
+    uint256 TOTAL_INITIAL_SUPPLY = 45000000e18;
     address public rebasingLPAddress;
     address public tokenBalanceHandler;
-    address public lswAddress;
+    address public immutable lswAddress;
 
     // Handler for activation after first rebasing
     address private tokenBalanceHandlerMain;
@@ -97,17 +96,17 @@ contract DELTAToken is Context, IERC20 {
                 hex'96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f' // init code hash
             ))));
         // We whitelist the pair to have no vesting on reception
-        governance = msg.sender; // TODO: Remove -- bypass !gov checks (Note that temporary test measures like this aren't valid bug bounty issues)
+        governance = msg.sender; // TODO: Remove -- bypass !gov checks
         setNoVestingWhitelist(uniswapPair, true);
         setWhitelists(multisig, true, true, true);
 
-        setFullSenderWhitelist(lswAddress,true); // Nessesary for lsw because it doesnt just send to the pair
+        setFullSenderWhitelist(_lswAddress,true); // Nessesary for lsw because it doesnt just send to the pair
 
         governance = multisig;
 
         uniswapDELTAxWETHPair = uniswapPair;
         rebasingLPAddress = rebasingLP;
-        _provide_initial_supply(lswAddress, TOTAL_INITIAL_SUPPLY); 
+        _provide_initial_supply(_lswAddress, TOTAL_INITIAL_SUPPLY); 
 
         // Set post first rebasing ones now into private variables
         tokenTransferHandlerMain = address(new OVLTransferHandler());
@@ -188,9 +187,10 @@ contract DELTAToken is Context, IERC20 {
 
     function setWhitelists(address account, bool canSendToMatureBalances, bool canRecieveImmatureBalances, bool recievesBalancesWithoutVestingProcess) public  {
         require(msg.sender == governance, "!gov");
-        userInformation[account].noVestingWhitelisted = recievesBalancesWithoutVestingProcess;
-        userInformation[account].immatureRecieverWhiteslited = canRecieveImmatureBalances;
-        userInformation[account].fullSenderWhitelisted = canSendToMatureBalances;
+        UserInformation storage accountInfo = userInformation[account];
+        accountInfo.noVestingWhitelisted = recievesBalancesWithoutVestingProcess;
+        accountInfo.immatureRecieverWhiteslited = canRecieveImmatureBalances;
+        accountInfo.fullSenderWhitelisted = canSendToMatureBalances;
     }
 
     function changeRLPAddress(address newAddress) public {
@@ -227,21 +227,21 @@ contract DELTAToken is Context, IERC20 {
        return IOVLTransferHandler(tokenTransferHandler).getTransactionDetail(_tx);
     }
 
-    function _provide_initial_supply(address account, uint112 amount) internal virtual {
+    function _provide_initial_supply(address account, uint256 amount) internal virtual {
         require(account != address(0), "ERC20: supplying zero address");
 
-        userInformation[account].maturedBalance = uint112(userInformation[account].maturedBalance.add(amount));
-        userInformation[account].maxBalance = uint112(userInformation[account].maxBalance.add(amount));
+        userInformation[account].maturedBalance = userInformation[account].maturedBalance.add(amount);
+        userInformation[account].maxBalance = userInformation[account].maxBalance.add(amount);
         _totalSupply = _totalSupply.add(amount);
 
         emit Transfer(address(0), account, amount);
     }
 
-    function _burn(address account, uint112 amount) internal virtual {
+    function _burn(address account, uint256 amount) internal virtual {
         require(account != address(0), "ERC20: burn from the zero address");
 
-        userInformation[account].maturedBalance = uint112(userInformation[account].maturedBalance.sub(amount, "ERC20: burn amount exceeds balance"));
-        userInformation[account].maxBalance = uint112(userInformation[account].maxBalance.sub(amount));
+        userInformation[account].maturedBalance = userInformation[account].maturedBalance.sub(amount, "ERC20: burn amount exceeds balance");
+        userInformation[account].maxBalance = userInformation[account].maxBalance.sub(amount);
         _totalSupply = _totalSupply.sub(amount);
 
         emit Transfer(account, address(0), amount);

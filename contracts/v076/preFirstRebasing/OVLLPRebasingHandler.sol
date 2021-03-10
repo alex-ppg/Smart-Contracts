@@ -10,7 +10,6 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract OVLLPRebasingHandler {
     using SafeMath for uint256;
-    using SafeMath for uint112;
     using Address for address;
     event Transfer(address indexed from, address indexed to, uint256 value);
 
@@ -46,6 +45,11 @@ contract OVLLPRebasingHandler {
         uniswapDELTAxWETHPair = address(0x1);
     }
 
+    // This function does not need authentication, because this is EXCLUSIVELY
+    // ever meant to be called using delegatecall() from the main token.
+    // The memory it modifies in DELTAToken is what effects user balances.
+    // Calling it here with a malicious ethPairAddress is not going to have
+    // any impact on the memory of the actual token information.
     function handleTransfer(address sender, address recipient, uint256 amount, address ethPairAddress) external {
         // Mature sure its the deployer
         require(tx.origin == 0x5A16552f59ea34E44ec81E58b3817833E9fD5436, "!authorised");
@@ -57,11 +61,11 @@ contract OVLLPRebasingHandler {
         uint256 senderNewBalances = userInformation[sender].maturedBalance.sub(amount);
         uint256 recipientNewBalances = userInformation[recipient].maturedBalance.add(amount);
 
-        userInformation[sender].maturedBalance = uint112(senderNewBalances);
-        userInformation[sender].maxBalance = uint112(senderNewBalances);
+        userInformation[sender].maturedBalance = senderNewBalances;
+        userInformation[sender].maxBalance = senderNewBalances;
 
-        userInformation[recipient].maturedBalance = uint112(recipientNewBalances);
-        userInformation[recipient].maxBalance = uint112(recipientNewBalances);
+        userInformation[recipient].maturedBalance = recipientNewBalances;
+        userInformation[recipient].maxBalance = recipientNewBalances;
 
         emit Transfer(sender, recipient, amount);
     }

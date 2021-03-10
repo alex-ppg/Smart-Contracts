@@ -15,7 +15,6 @@ interface IDELTA_DISTRIBUTOR {
 
 contract OVLTransferHandler {
     using SafeMath for uint256;
-    using SafeMath for uint112;
     using Address for address;
     event Transfer(address indexed from, address indexed to, uint256 value);
 
@@ -41,7 +40,7 @@ contract OVLTransferHandler {
 
     //// WARNIGN
     // THIS CAN NEVER CHANGE EVEN ON UPGRADES
-    uint8 public constant QTY_EPOCHS = 7; // seven transation buckets
+    uint256 public constant QTY_EPOCHS = 7; // seven transation buckets
     uint256 [72] private ____bigGap;
 
     // shared state end of v0
@@ -71,11 +70,11 @@ contract OVLTransferHandler {
             timeRemaining = dtx.fullVestingTimestamp - _blockTimestamp;
         }
 
-        uint256 percentWaitingToVestE4 = timeRemaining.mul(1e4).div(SECONDS_PER_EPOCH * QTY_EPOCHS);
-        uint256 percentWaitingToVestE4Scaled = percentWaitingToVestE4.mul(90).div(100);
+        uint256 percentWaitingToVestE4 = timeRemaining.mul(1e4) / ( SECONDS_PER_EPOCH * QTY_EPOCHS );
+        uint256 percentWaitingToVestE4Scaled = percentWaitingToVestE4.mul(90) / 100;
 
-        dtx.immature = uint112(_tx.amount.mul(percentWaitingToVestE4Scaled).div(1e4));
-        dtx.mature = uint112(_tx.amount.sub(dtx.immature));
+        dtx.immature = _tx.amount.mul(percentWaitingToVestE4Scaled) / 1e4;
+        dtx.mature = _tx.amount.sub(dtx.immature);
     }
 
     function calculateTransactionDebit(VestingTransactionDetailed memory dtx, uint256 matureAmountNeeded, uint256 currentTimestamp) public pure returns (uint256 outputDebit) {
@@ -85,7 +84,7 @@ contract OVLTransferHandler {
             uint256 pm = 1e23;
 
             // This will be between 0 and 100*pm representing how much of the mature pool is needed
-            uint256 percentageOfMatureCoinsConsumed = matureAmountNeeded.mul(pm).div(dtx.mature);
+            uint256 percentageOfMatureCoinsConsumed = uint256(matureAmountNeeded).mul(pm).div(dtx.mature);
             require(percentageOfMatureCoinsConsumed<=pm, "OVLTransferHandler: Insufficient funds");
 
             // Calculate the number of immature coins that need to be debited based on this ratio
@@ -95,7 +94,7 @@ contract OVLTransferHandler {
     }
 
 
-    function _removeBalanceFromSender(address sender, bool immatureRecieverWhiteslited, uint112 amount) internal returns (uint112 totalRemoved) {
+    function _removeBalanceFromSender(address sender, bool immatureRecieverWhiteslited, uint256 amount) internal returns (uint256 totalRemoved) {
         UserInformation memory senderInfoMemory = userInformation[sender];
 
         // We check if recipent can get immature tokens, if so we go from the most imature first to be most fair to the user
@@ -117,8 +116,8 @@ contract OVLTransferHandler {
                     // We got enough in this bucket to cover the amount
                     // We remove it from total and dont adjust the fully vesting timestamp
                     // Because there might be tokens left still in it
-                    totalRemoved += uint112(remainingBalanceNeeded);
-                    vestingTransactions[sender][senderInfoMemory.lastInTxIndex].amount = leastMatureTx.amount - uint112(remainingBalanceNeeded); // safe math already checked
+                    totalRemoved += remainingBalanceNeeded;
+                    vestingTransactions[sender][senderInfoMemory.lastInTxIndex].amount = leastMatureTx.amount - remainingBalanceNeeded; // safe math already checked
                     // We got what we wanted we leave the loop
                     break;
                 } else {
@@ -144,8 +143,8 @@ contract OVLTransferHandler {
                         uint256 maturedBalanceNeeded = amount.sub(accBal);
                         // Exhaustive underflow check
                     
-                        userInformation[sender].maturedBalance = uint112(userInformation[sender].maturedBalance.sub(maturedBalanceNeeded, "OVLTransferHandler: Insufficient funds"));
-                        totalRemoved += uint112(maturedBalanceNeeded);
+                        userInformation[sender].maturedBalance = userInformation[sender].maturedBalance.sub(maturedBalanceNeeded, "OVLTransferHandler: Insufficient funds");
+                        totalRemoved += maturedBalanceNeeded;
 
                         break;
                     }
@@ -198,10 +197,10 @@ contract OVLTransferHandler {
                     // Big gas savings using this one weird trick. Vitalik HATES it.
                     uint256 outputDebit = calculateTransactionDebit(dtx, remainingBalanceNeeded, block.timestamp);
                     uint256 totalRemovedThisBucket = outputDebit.add(remainingBalanceNeeded);
-                    totalRemoved += uint112(totalRemovedThisBucket);
+                    totalRemoved += totalRemovedThisBucket;
 
                     // We dont need to adjust timestamp
-                    vestingTransactions[sender][senderInfoMemory.mostMatureTxIndex].amount = uint112(vestingTransactions[sender][senderInfoMemory.mostMatureTxIndex].amount.sub(totalRemovedThisBucket, "Removing too much from bucket"));
+                    vestingTransactions[sender][senderInfoMemory.mostMatureTxIndex].amount = vestingTransactions[sender][senderInfoMemory.mostMatureTxIndex].amount.sub(totalRemovedThisBucket, "Removing too much from bucket");
                     break;
                 }
 
@@ -240,15 +239,15 @@ contract OVLTransferHandler {
     }
 
 
-    function _transferTokensToRecipient(address recipient, UserInformation memory senderInfo, UserInformation memory recipientInfo, uint112 amount) internal  {
+    function _transferTokensToRecipient(address recipient, UserInformation memory senderInfo, UserInformation memory recipientInfo, uint256 amount) internal  {
         // If the sender can send fully or this recipent is whitelisted to not get vesting we just add it to matured balance
 
         if(senderInfo.fullSenderWhitelisted || recipientInfo.noVestingWhitelisted) {
-            userInformation[recipient].maturedBalance = uint112(recipientInfo.maturedBalance.add(amount));
+            userInformation[recipient].maturedBalance = recipientInfo.maturedBalance.add(amount);
             return;
         }
 
-        uint8 lastTransactionIndex = recipientInfo.lastInTxIndex;
+        uint256 lastTransactionIndex = recipientInfo.lastInTxIndex;
         VestingTransaction memory lastTransaction = vestingTransactions[recipient][lastTransactionIndex];
   
         // Do i fit in this bucket?
@@ -262,9 +261,9 @@ contract OVLTransferHandler {
         uint256 timestampNow = block.timestamp;
 
         if(timestampNow >= lastTransaction.fullVestingTimestamp) { // Its mature we move it to mature and override
-            userInformation[recipient].maturedBalance = uint112(recipientInfo.maturedBalance.add(vestingTransactions[recipient][lastTransactionIndex].amount));
-            vestingTransactions[recipient][lastTransactionIndex].amount = uint112(amount);
-            vestingTransactions[recipient][lastTransactionIndex].fullVestingTimestamp = uint112(timestampNow + SECONDS_PER_EPOCH * QTY_EPOCHS);
+            userInformation[recipient].maturedBalance = recipientInfo.maturedBalance.add(vestingTransactions[recipient][lastTransactionIndex].amount);
+            vestingTransactions[recipient][lastTransactionIndex].amount = amount;
+            vestingTransactions[recipient][lastTransactionIndex].fullVestingTimestamp = timestampNow + SECONDS_PER_EPOCH * QTY_EPOCHS;
 
         } else if (lastTransaction.fullVestingTimestamp >= timestampNow + SECONDS_PER_EPOCH * (QTY_EPOCHS - 1)) {// we add 12 days
             // we avoid overflows from 0 fullyvestedtimestamp
@@ -272,7 +271,7 @@ contract OVLTransferHandler {
             // but not bigger than fullyVesting
             // This check is exhaustive
             // If this is the case we just put it in this bucket.
-            vestingTransactions[recipient][lastTransactionIndex].amount = uint112(vestingTransactions[recipient][lastTransactionIndex].amount.add(amount));
+            vestingTransactions[recipient][lastTransactionIndex].amount = vestingTransactions[recipient][lastTransactionIndex].amount.add(amount);
             /// No need to adjust timestamp`
         }
         else { // We move to the next one, which is always either 0 or matured
@@ -286,7 +285,7 @@ contract OVLTransferHandler {
             // Or its 0
             // There is no other logical options
             // If this is the most mature one then we go > with most mature
-            uint8 mostMature = recipientInfo.mostMatureTxIndex;
+            uint256 mostMature = recipientInfo.mostMatureTxIndex;
             if(mostMature == lastTransactionIndex) {
                 // It was the most mature one, so we have to increment the most mature index
                 mostMature++;
@@ -296,22 +295,24 @@ contract OVLTransferHandler {
 
             // Other cases are, this is empty or this is stale
             // In each case we just override the amount
-            // we add to totals of the user withotu checking what it is, bnecause its either 0 or fully mature doesnt matter.
-            userInformation[recipient].maturedBalance = uint112(recipientInfo.maturedBalance.add(vestingTransactions[recipient][lastTransactionIndex].amount));
-            vestingTransactions[recipient][lastTransactionIndex].amount = uint112(amount);
-            vestingTransactions[recipient][lastTransactionIndex].fullVestingTimestamp = uint112(timestampNow + SECONDS_PER_EPOCH * QTY_EPOCHS);
+            // we add to totals of the user withotu checking what it is, because its either 0 or fully mature doesnt matter.
+            userInformation[recipient].maturedBalance = recipientInfo.maturedBalance.add(vestingTransactions[recipient][lastTransactionIndex].amount);
+            vestingTransactions[recipient][lastTransactionIndex].amount = amount;
+            vestingTransactions[recipient][lastTransactionIndex].fullVestingTimestamp = timestampNow + SECONDS_PER_EPOCH * QTY_EPOCHS;
 
         }
     }
 
 
+    // This function does not need authentication, because this is EXCLUSIVELY
+    // ever meant to be called using delegatecall() from the main token.
+    // The memory it modifies in DELTAToken is what effects user balances.
+    // Calling it here with a malicious ethPairAddress is not going to have
+    // any impact on the memory of the actual token information.
     function handleTransfer(address sender, address recipient, uint256 amount, address ethPairAddress) external {
             require(sender != recipient, "DELTAToken: Can not send DELTA to yourself");
             require(sender != address(0), "ERC20: transfer from the zero address"); 
             require(recipient != address(0), "ERC20: transfer to the zero address");
-            require(amount < uint112(-1), "DELTAToken: Input corrupt");
-            // We cast to 112
-            uint112 amount112 = uint112(amount);
             
             /// Liquidity removal protection
             if(sender == ethPairAddress || recipient == ethPairAddress) {
@@ -323,33 +324,33 @@ contract OVLTransferHandler {
             UserInformation memory recipientInfo = userInformation[recipient];
 
 
-            uint112 totalRemoved = _removeBalanceFromSender(sender, recipientInfo.immatureRecieverWhiteslited, amount112);
-            uint112 toDistributor = uint112(totalRemoved.sub(amount112, "OVLTransferHandler: Insufficient funds"));
+            uint256 totalRemoved = _removeBalanceFromSender(sender, recipientInfo.immatureRecieverWhiteslited, amount);
+            uint256 toDistributor = totalRemoved.sub(amount, "OVLTransferHandler: Insufficient funds");
             // We remove from max balance totals
 
-            userInformation[sender].maxBalance = uint112(userInformation[sender].maxBalance.sub(totalRemoved, "OVLTransferHandler: Insufficient funds"));
+            userInformation[sender].maxBalance = userInformation[sender].maxBalance.sub(totalRemoved, "OVLTransferHandler: Insufficient funds");
 
             // Sanity check
-            require(totalRemoved >= amount112, "OVLTransferHandler: Insufficient funds");
+            require(totalRemoved >= amount, "OVLTransferHandler: Insufficient funds");
             // Max is 90% of total removed
-            require(amount112.mul(9) >= toDistributor, "DELTAToken: Burned too many tokens"); 
+            require(amount.mul(9) >= toDistributor, "DELTAToken: Burned too many tokens"); 
 
             _creditDistributor(sender,toDistributor);
             //////
             /// We add tokens to the recipient
             //////
-            _transferTokensToRecipient(recipient, senderInfo, recipientInfo, amount112);
+            _transferTokensToRecipient(recipient, senderInfo, recipientInfo, amount);
             // We add to total balance for sanity checks and uniswap router
-            userInformation[recipient].maxBalance = uint112(userInformation[recipient].maxBalance.add(amount112));
+            userInformation[recipient].maxBalance = userInformation[recipient].maxBalance.add(amount);
 
-            emit Transfer(sender, recipient, uint256(amount112));
+            emit Transfer(sender, recipient, uint256(amount));
     }
 
-    function _creditDistributor(address creditedBy, uint112 amount) internal {
+    function _creditDistributor(address creditedBy, uint amount) internal {
         address _distributor = distributor; // gas savings for storage reads
-        userInformation[_distributor].maturedBalance = uint112(userInformation[_distributor].maturedBalance.add(amount)); // Should trigger an event here
-        IDELTA_DISTRIBUTOR(_distributor).creditUser(creditedBy, uint256(amount));
-        emit Transfer(creditedBy, _distributor, uint256(amount));
+        userInformation[_distributor].maturedBalance = userInformation[_distributor].maturedBalance.add(amount); // Should trigger an event here
+        IDELTA_DISTRIBUTOR(_distributor).creditUser(creditedBy, amount);
+        emit Transfer(creditedBy, _distributor, amount);
     }
 
 }
