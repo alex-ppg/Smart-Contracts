@@ -16,15 +16,17 @@ contract OVLVestingCalculator {
         if(_tx.fullVestingTimestamp == 0) {
             return dtx;
         }
+
         dtx.amount = _tx.amount;
         dtx.fullVestingTimestamp = _tx.fullVestingTimestamp;
+
         // at precision E4, 1000 is 10%
         uint256 timeRemaining;
         if(_blockTimestamp >= dtx.fullVestingTimestamp) {
             // Fully vested
-            timeRemaining = 0;
-        }
-        else {
+            dtx.mature = _tx.amount;
+            return dtx;
+        } else {
             timeRemaining = dtx.fullVestingTimestamp - _blockTimestamp;
         }
 
@@ -43,9 +45,8 @@ contract OVLVestingCalculator {
         uint256 timeRemaining;
         if(_blockTimestamp >= _tx.fullVestingTimestamp) {
             // Fully vested
-            timeRemaining = 0;
-        }
-        else {
+            return _tx.amount;
+        } else {
             timeRemaining = _tx.fullVestingTimestamp - _blockTimestamp;
         }
 
@@ -58,16 +59,12 @@ contract OVLVestingCalculator {
 
     function calculateTransactionDebit(VestingTransactionDetailed memory dtx, uint256 matureAmountNeeded, uint256 currentTimestamp) public pure returns (uint256 outputDebit) {
         if(dtx.fullVestingTimestamp > currentTimestamp) {
-            // Only a partially vested transaction needs an output debit to occur
-            // Precision Multiplier -- this many zeros (23) seems to get all the precision needed for all 18 decimals to be only off by a max of 1 unit
-            uint256 pm = 1e23;
-
             // This will be between 0 and 100*pm representing how much of the mature pool is needed
-            uint256 percentageOfMatureCoinsConsumed = matureAmountNeeded.mul(pm).div(dtx.mature);
-            require(percentageOfMatureCoinsConsumed <= pm, "OVLTransferHandler: Insufficient funds");
+            uint256 percentageOfMatureCoinsConsumed = matureAmountNeeded.mul(PM).div(dtx.mature);
+            require(percentageOfMatureCoinsConsumed <= PM, "OVLTransferHandler: Insufficient funds");
 
             // Calculate the number of immature coins that need to be debited based on this ratio
-            outputDebit = dtx.immature.mul(percentageOfMatureCoinsConsumed).div(pm);
+            outputDebit = dtx.immature.mul(percentageOfMatureCoinsConsumed) / PM;
         }
 
         // shouldnt this use outputDebit
