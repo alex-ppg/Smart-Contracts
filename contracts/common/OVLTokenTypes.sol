@@ -45,3 +45,6 @@ uint256 constant QTY_EPOCHS = 7;
 uint256 constant SECONDS_PER_EPOCH = 172800; // About 2days
 
 uint256 constant FULL_EPOCH_TIME = SECONDS_PER_EPOCH * QTY_EPOCHS;
+
+// Precision Multiplier -- this many zeros (23) seems to get all the precision needed for all 18 decimals to be only off by a max of 1 unit
+uint256 constant PM = 1e23;
