@@ -1,76 +1,70 @@
-import "./OVLTokenTypes.sol";
+// SPDX-License-Identifier: MIT
+// DELTA-BUG-BOUNTY
+pragma solidity ^0.7.6;
+pragma abicoder v2;
+
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/math/SafeMath.sol"; 
-// DELTA-BUG-BOUNTY
 
-pragma abicoder v2;
-interface IDeltaToken {
-    function userInformation(address) external view returns (UserInformation memory);
-    function liquidityRebasingPermitted() external view returns (bool);
-    function lpTokensInPair() external view returns (uint256);
-    function vestingTransactions(address,uint256) external view returns (VestingTransaction memory);
+import "../common/OVLTokenTypes.sol";
+import "../common/OVLVestingCalculator.sol";
 
-}
+import "../interfaces/IOVLBalanceHandler.sol";
+import "../interfaces/IOVLTransferHandler.sol";
+import "../interfaces/IRebasingLiquidityToken.sol";
+import "../interfaces/IDELTAToken.sol";
 
-interface IOVLTransferHandler {
-    function getTransactionDetail(VestingTransaction memory) external view returns (VestingTransactionDetailed memory);
-}
-
-contract OVLBalanceHandler {
+contract OVLBalanceHandler is IOVLBalanceHandler {
     using SafeMath for uint256;
 
-    IDeltaToken immutable DELTA_TOKEN;
-    address constant UNISWAP_V2_ROUTER = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;
-    uint256 constant public QTY_EPOCHS = 7;
-    IERC20 immutable public DELTA_X_WETH_PAIR;
-    IOVLTransferHandler immutable public TRANSACTION_HANDLER;
+    IDELTAToken private immutable DELTA_TOKEN;
+    IERC20 private immutable DELTA_X_WETH_PAIR;
+    IOVLTransferHandler private immutable TRANSFER_HANDLER;
 
+    address private constant UNISWAP_V2_ROUTER = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;
 
-
-    constructor(address _transactionHandler, address pair) public {
-        DELTA_TOKEN = IDeltaToken(msg.sender);
-        TRANSACTION_HANDLER = IOVLTransferHandler(_transactionHandler);
-        DELTA_X_WETH_PAIR = IERC20(pair);
+    constructor(IOVLTransferHandler transactionHandler, IERC20 pair) {
+        DELTA_TOKEN = IDELTAToken(msg.sender);
+        TRANSFER_HANDLER = transactionHandler;
+        DELTA_X_WETH_PAIR = pair;
     }
 
-    function handleBalanceCalculations(address account, address sender) public view returns (uint256) {
-        UserInformation memory accountInfo = DELTA_TOKEN.userInformation(account);
-
+    function handleBalanceCalculations(address account, address sender) external view override returns (uint256) {
+        UserInformationLite memory ui = DELTA_TOKEN.getUserInfo(account);
         // We trick the uniswap router path revert by returning the whole balance
         if(sender == UNISWAP_V2_ROUTER) {
-            return accountInfo.maxBalance;
-
+            return ui.maxBalance;
         }
 
-        uint256 mature = accountInfo.maturedBalance;
         // console.log(" # DELTAToken.sol # Collect balances for balanceOf call...");
-        while(true) {
-            VestingTransactionDetailed memory dtx = TRANSACTION_HANDLER.getTransactionDetail(DELTA_TOKEN.vestingTransactions(account, accountInfo.mostMatureTxIndex)); 
+        // potentially do i + 1 % epochs
+        while (true) {
+            uint256 mature = DELTA_TOKEN.getMatureBalance(account, ui.mostMatureTxIndex); 
 
 
-            mature = mature.add(dtx.mature);
+            ui.maturedBalance = ui.maturedBalance.add(mature);
             
 
             // We go until we encounter a empty above most mature tx
-            if(accountInfo.mostMatureTxIndex == accountInfo.lastInTxIndex) { 
-                break ;
+            if(ui.mostMatureTxIndex == ui.lastInTxIndex) { 
+                break;
             }
-            accountInfo.mostMatureTxIndex++;
 
-            if(accountInfo.mostMatureTxIndex == QTY_EPOCHS) { accountInfo.mostMatureTxIndex = 0; }
+            ui.mostMatureTxIndex++;
+
+            if(ui.mostMatureTxIndex == QTY_EPOCHS) { ui.mostMatureTxIndex = 0; }
         }
 
-        IERC20 _pair = DELTA_X_WETH_PAIR;//gas sav
         // LP Removal protection
-        if(sender == address(_pair) && DELTA_TOKEN.liquidityRebasingPermitted() == false) {
+        if(sender == address(DELTA_X_WETH_PAIR) && !DELTA_TOKEN.liquidityRebasingPermitted()) {
             // If the sender is uniswap and is querying balanceOf, this only happens first inside the burn function
             // This means if the balance of LP tokens here went up
             // We should revert
             // LP tokens supply can raise but it can never get lower with this method, if we detect a raise here we should revert
             // Rest of this code is inside the _transfer function
-            require(_pair.balanceOf(address(_pair)) == DELTA_TOKEN.lpTokensInPair(), "DELTAToken: Liquidity removal is forbidden");
+            require(DELTA_X_WETH_PAIR.balanceOf(address(DELTA_X_WETH_PAIR)) == DELTA_TOKEN.lpTokensInPair(), "DELTAToken: Liquidity removal is forbidden");
         }
 
-        return mature;
+        return ui.maturedBalance;
     }
 }

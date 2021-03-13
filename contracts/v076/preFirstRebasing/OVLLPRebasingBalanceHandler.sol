@@ -1,23 +1,23 @@
-import "../OVLTokenTypes.sol";
+// SPDX-License-Identifier: MIT
 // DELTA-BUG-BOUNTY
-
 pragma abicoder v2;
+pragma solidity ^0.7.6;
+
+import "../../interfaces/IDELTAToken.sol";
+import "../../interfaces/IOVLBalanceHandler.sol";
+
+import "../../common/OVLTokenTypes.sol";
 
 
-interface IDELTA_TOKEN {
-    function userInformation(address) external view returns (UserInformation memory);
-}
+contract OVLLPRebasingBalanceHandler is IOVLBalanceHandler {
+    IDELTAToken private immutable DELTA_TOKEN;
 
-
-contract OVLLPRebasingBalanceHandler {
-
-    IDELTA_TOKEN immutable DELTA_TOKEN;
-
-    constructor() public {
-        DELTA_TOKEN = IDELTA_TOKEN(msg.sender);
+    constructor() {
+        DELTA_TOKEN = IDELTAToken(msg.sender);
     }
 
-    function handleBalanceCalculations(address account, address sender) public view returns (uint256) {
-        return DELTA_TOKEN.userInformation(account).maxBalance;
+    function handleBalanceCalculations(address account, address) external view override returns (uint256) {
+        UserInformationLite memory ui = DELTA_TOKEN.getUserInfo(account);
+        return ui.maxBalance;
     }
 }

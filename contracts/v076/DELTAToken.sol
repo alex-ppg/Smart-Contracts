@@ -6,26 +6,21 @@ pragma solidity ^0.7.6;
 import "@openzeppelin/contracts/GSN/Context.sol";
 import "@openzeppelin/contracts/math/SafeMath.sol"; 
 import "@openzeppelin/contracts/utils/Address.sol";
-import "./OVLTokenTypes.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+import "../interfaces/IOVLBalanceHandler.sol";
+import "../interfaces/IOVLTransferHandler.sol";
+import "../interfaces/IRebasingLiquidityToken.sol";
+import "../interfaces/IWETH.sol";
+
+import "../common/OVLBase.sol";
+import "../common/OVLTokenTypes.sol";
+import "../common/OVLVestingCalculator.sol";
+
 import "./OVLTransferHandler.sol";
 import "./OVLBalanceHandler.sol";
 import "./preFirstRebasing/OVLLPRebasingHandler.sol";
 import "./preFirstRebasing/OVLLPRebasingBalanceHandler.sol";
-
-interface IWETH {
-    function deposit() external payable;
-    function transfer(address to, uint value) external returns (bool);
-    function withdraw(uint) external;
-    function balanceOf(address) external returns (uint256);
-}
-
-interface IRebasingLiquidityToken {
-    function rebase(uint256, uint256) external;
-}
-
-interface IOVLBalanceHandler {
-    function handleBalanceCalculations(address, address) external pure returns (uint256);
-}
 
 // Implementation of the DELTA token responsible
 // for the CORE ecosystem options layer
@@ -33,114 +28,95 @@ interface IOVLBalanceHandler {
 // This token is time lock guarded by 90% FoT which disappears after 2 weeks to 0%
 // balanceOf will return the spendable amount outside of the fee on transfer.
 
-contract DELTAToken is Context, IERC20 {
+contract DELTAToken is OVLBase, OVLVestingCalculator, Context, IERC20 {
     using SafeMath for uint256;
     using Address for address;
 
-    // shared state begin v0
-    uint256 private _gap;
-    mapping (address => UserInformation) public userInformation;
-    uint256 private __gap;
-    mapping (address => VestingTransaction[QTY_EPOCHS]) public vestingTransactions;
-    
-    uint256 private ___gap;
-    mapping (address => uint256) private _maxPossibleBalances;
-    uint256 private ____gap;
-    mapping (address => mapping (address => uint256)) private _allowances;
-    uint256 private _totalSupply;
-
-    address public distributor;
-    uint256 public lpTokensInPair;
-    address constant private uniswapRouterv2 = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;
-    address public immutable uniswapDELTAxWETHPair;
-    // Handles vesting
-
-
-    //// WARNIGN
-    // THIS CAN NEVER CHANGE EVEN ON UPGRADES
-    uint256 public constant QTY_EPOCHS = 7; // seven transation buckets
-    uint256 [72] private ____bigGap;
-
-    // shared state end of v0
-
     bool public liquidityRebasingPermitted;
     address public governance;
-    string private _name;
-    string private _symbol;
-    uint8 private immutable _decimals;
     address public tokenTransferHandler;
-    address constant public wethAddress = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
-    IWETH constant public wETH = IWETH(wethAddress);
-    uint256 TOTAL_INITIAL_SUPPLY = 45000000e18;
     address public rebasingLPAddress;
     address public tokenBalanceHandler;
-    address public immutable lswAddress;
+    
+
+
+    // ERC-20 Variables
+    string private constant NAME = "DELTA.financial - deep DeFi derivatives";
+    string private constant SYMBOL = "DELTA";
+    uint8 private constant DECIMALS = 18;
+    uint256 private constant TOTAL_SUPPLY = 45_000_000e18;
+
+    // Configuration
+    address public immutable uniswapDELTAxWETHPair;
+    address private constant WETH_ADDRESS = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
+    address private constant BURNER = 0xDeaDbeefdEAdbeefdEadbEEFdeadbeEFdEaDbeeF;
 
     // Handler for activation after first rebasing
-    address private tokenBalanceHandlerMain;
-    address private tokenTransferHandlerMain;
+    address private immutable tokenBalanceHandlerMain;
+    address private immutable tokenTransferHandlerMain;
 
-    constructor (address _lswAddress, address rebasingLP,  address multisig) public {
-        _name = "DELTA.financial - deep DeFi derivatives";
-        _symbol = "DELTA";
-        _decimals = 18;
-        lswAddress = _lswAddress;
-        require(address(this) < wethAddress, "DELTAToken: Invalid Token Address");
+    constructor (address _lswAddress, address rebasingLP,  address multisig) {
+        require(address(this) < WETH_ADDRESS, "DELTAToken: Invalid Token Address");
 
         // We get the pair address
         // token0 is the smaller address
         address uniswapPair = address(uint(keccak256(abi.encodePacked(
                 hex'ff',
                 0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f, // Mainnet uniswap factory
-                keccak256(abi.encodePacked(address(this), wethAddress)),
+                keccak256(abi.encodePacked(address(this), WETH_ADDRESS)),
                 hex'96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f' // init code hash
             ))));
         // We whitelist the pair to have no vesting on reception
         governance = msg.sender; // TODO: Remove -- bypass !gov checks
+
         setNoVestingWhitelist(uniswapPair, true);
         setWhitelists(multisig, true, true, true);
 
-        setFullSenderWhitelist(_lswAddress,true); // Nessesary for lsw because it doesnt just send to the pair
+        setFullSenderWhitelist(_lswAddress, true); // Nessesary for lsw because it doesnt just send to the pair
 
         governance = multisig;
 
         uniswapDELTAxWETHPair = uniswapPair;
         rebasingLPAddress = rebasingLP;
-        _provide_initial_supply(_lswAddress, TOTAL_INITIAL_SUPPLY); 
+        _provideInitialSupply(_lswAddress, TOTAL_SUPPLY); 
 
         // Set post first rebasing ones now into private variables
-        tokenTransferHandlerMain = address(new OVLTransferHandler());
-        tokenBalanceHandlerMain = address(new OVLBalanceHandler(tokenTransferHandlerMain, uniswapPair)); 
+        address transferHandler = address(new OVLTransferHandler());
+        tokenTransferHandlerMain = transferHandler;
+        tokenBalanceHandlerMain = address(new OVLBalanceHandler(IOVLTransferHandler(transferHandler), IERC20(uniswapPair))); 
         
         //Set pre rebasing ones as main ones
         tokenBalanceHandler = address(new OVLLPRebasingBalanceHandler()); 
         tokenTransferHandler = address(new OVLLPRebasingHandler());
-
     }
 
-    function activatePostFirstRebasingState() public {
-        require(msg.sender == governance, "!gov");
+    function activatePostFirstRebasingState() public isGovernance() {
         tokenTransferHandler = tokenTransferHandlerMain;
         tokenBalanceHandler = tokenBalanceHandlerMain;
     }
 
-    function name() public view returns (string memory) {
-        return _name;
+    function name() public pure returns (string memory) {
+        return NAME;
     }
 
-    function symbol() public view returns (string memory) {
-        return _symbol;
+    function symbol() public pure returns (string memory) {
+        return SYMBOL;
     }
 
-    function decimals() public view returns (uint8) {
-        return _decimals;
+    function decimals() public pure returns (uint8) {
+        return DECIMALS;
     }
 
     function totalSupply() public view override returns (uint256) {
-        return _totalSupply.sub(balanceOf(0xDeaDbeefdEAdbeefdEadbEEFdeadbeEFdEaDbeeF));
+        return TOTAL_SUPPLY - balanceOf(BURNER);
     }
 
     function transfer(address recipient, uint256 amount) public virtual override returns (bool) {
+        _transfer(_msgSender(), recipient, amount);
+        return true;
+    }
+    
+    function gasTestTransfer(address recipient, uint256 amount) public virtual returns (bool) {
         _transfer(_msgSender(), recipient, amount);
         return true;
     }
@@ -170,26 +146,22 @@ contract DELTAToken is Context, IERC20 {
         return true;
     }
 
-    function setFullSenderWhitelist(address account, bool canSendToMatureBalances) public {
-        require(msg.sender == governance, "!gov");
-        userInformation[account].fullSenderWhitelisted = canSendToMatureBalances;
+    function setFullSenderWhitelist(address account, bool canSendToMatureBalances) public isGovernance() {
+        _userInformation[account].fullSenderWhitelisted = canSendToMatureBalances;
     }
 
-   function setImmatureRecipentWhitelist(address account, bool canRecieveImmatureBalances) public {
-        require(msg.sender == governance, "!gov");
-        userInformation[account].immatureRecieverWhiteslited = canRecieveImmatureBalances;
+   function setImmatureRecipentWhitelist(address account, bool canRecieveImmatureBalances) public isGovernance() {
+        _userInformation[account].immatureReceiverWhitelisted = canRecieveImmatureBalances;
     }
 
-    function setNoVestingWhitelist(address account, bool recievesBalancesWithoutVestingProcess) public {
-        require(msg.sender == governance, "!gov"); 
-        userInformation[account].noVestingWhitelisted = recievesBalancesWithoutVestingProcess;
+    function setNoVestingWhitelist(address account, bool recievesBalancesWithoutVestingProcess) public isGovernance() {
+        _userInformation[account].noVestingWhitelisted = recievesBalancesWithoutVestingProcess;
     }
 
-    function setWhitelists(address account, bool canSendToMatureBalances, bool canRecieveImmatureBalances, bool recievesBalancesWithoutVestingProcess) public  {
-        require(msg.sender == governance, "!gov");
-        UserInformation storage accountInfo = userInformation[account];
+    function setWhitelists(address account, bool canSendToMatureBalances, bool canRecieveImmatureBalances, bool recievesBalancesWithoutVestingProcess) public isGovernance() {
+        UserInformation storage accountInfo = _userInformation[account];
         accountInfo.noVestingWhitelisted = recievesBalancesWithoutVestingProcess;
-        accountInfo.immatureRecieverWhiteslited = canRecieveImmatureBalances;
+        accountInfo.immatureReceiverWhitelisted = canRecieveImmatureBalances;
         accountInfo.fullSenderWhitelisted = canSendToMatureBalances;
     }
 
@@ -204,47 +176,31 @@ contract DELTAToken is Context, IERC20 {
     function allowLiquidityRebasing(uint256 loopCount, uint256 percentOfLP) public {
         require(msg.sender == rebasingLPAddress, "DELTAToken: Only Rebasing LP contract can call this function");
         liquidityRebasingPermitted = true;
-        IRebasingLiquidityToken(rebasingLPAddress).rebase(loopCount,percentOfLP);
+        IRebasingLiquidityToken(rebasingLPAddress).rebase(loopCount, percentOfLP);
         liquidityRebasingPermitted = false;
     }
 
     function _transfer(address sender, address recipient, uint256 amount) internal virtual {
-
         bytes memory callData = abi.encodeWithSignature("handleTransfer(address,address,uint256,address)", sender, recipient, amount, uniswapDELTAxWETHPair);
         (bool success, bytes memory result) = tokenTransferHandler.delegatecall(callData);
 
-        if(success == false) {
+        if (!success) {
             revert(_getRevertMsg(result));
         } 
     }
     
     function balanceOf(address account) public view override returns (uint256) {
-        // function handleBalanceCalculations(address account, address sender) public view returns (uint256) {
         return IOVLBalanceHandler(tokenBalanceHandler).handleBalanceCalculations(account, msg.sender);
     }
 
-    function getTransactionDetail(VestingTransaction memory _tx) public view returns (VestingTransactionDetailed memory dtx) {
-       return IOVLTransferHandler(tokenTransferHandler).getTransactionDetail(_tx);
-    }
-
-    function _provide_initial_supply(address account, uint256 amount) internal virtual {
+    function _provideInitialSupply(address account, uint256 amount) internal virtual {
         require(account != address(0), "ERC20: supplying zero address");
 
-        userInformation[account].maturedBalance = userInformation[account].maturedBalance.add(amount);
-        userInformation[account].maxBalance = userInformation[account].maxBalance.add(amount);
-        _totalSupply = _totalSupply.add(amount);
+        UserInformation storage ui = _userInformation[account];
+        ui.maturedBalance = ui.maturedBalance.add(amount);
+        ui.maxBalance = ui.maxBalance.add(amount);
 
         emit Transfer(address(0), account, amount);
-    }
-
-    function _burn(address account, uint256 amount) internal virtual {
-        require(account != address(0), "ERC20: burn from the zero address");
-
-        userInformation[account].maturedBalance = userInformation[account].maturedBalance.sub(amount, "ERC20: burn amount exceeds balance");
-        userInformation[account].maxBalance = userInformation[account].maxBalance.sub(amount);
-        _totalSupply = _totalSupply.sub(amount);
-
-        emit Transfer(account, address(0), amount);
     }
 
     function _approve(address owner, address spender, uint256 amount) internal virtual {
@@ -256,20 +212,17 @@ contract DELTAToken is Context, IERC20 {
     }
 
     /// @notice sets a new distributor potentially with new distribution rules
-    function setDistributor(address _newDistributor) public  {
-        require(msg.sender == governance, "!gov");
+    function setDistributor(address _newDistributor) public isGovernance() {
         distributor = _newDistributor;
     }
 
     /// @notice sets the function that calculates returns from balanceOF
-    function setBalanceCalculator(address _newBalanceCalculator) public {
-        require(msg.sender == governance, "!gov");
+    function setBalanceCalculator(address _newBalanceCalculator) public isGovernance() {
         tokenBalanceHandler = _newBalanceCalculator;
     }
 
     /// @notice sets a contract with new logic for transfer handlers (contract upgrade)
-    function setTokenTransferHandler(address _newHandler) public {
-        require(msg.sender == governance, "!gov");
+    function setTokenTransferHandler(address _newHandler) public isGovernance() {
         tokenTransferHandler = _newHandler;
     }
 
@@ -286,16 +239,50 @@ contract DELTAToken is Context, IERC20 {
 
 
     function totalsForWallet(address account) public view returns (WalletTotals memory totals) {
-        uint256 mature = userInformation[account].maturedBalance;
+        uint256 mature = _userInformation[account].maturedBalance;
         uint256 immature;
+
         for(uint256 i = 0; i < QTY_EPOCHS; i++) {
-            VestingTransactionDetailed memory dtx = getTransactionDetail(vestingTransactions[account][i]); 
-            mature = mature.add(dtx.mature);
-            immature = immature.add(dtx.immature);
+            uint256 amount = vestingTransactions[account][i].amount;
+            uint256 matureTxBalance = getMatureBalance(vestingTransactions[account][i], block.timestamp);
+            mature = mature.add(matureTxBalance);
+            immature = immature.add(amount.sub(matureTxBalance));
         }
         totals.mature = mature;
         totals.immature = immature;
         totals.total = mature.add(immature);
     }
 
+    // Optimization for Balance Handler
+    function getUserInfo(address user) external view returns (UserInformationLite memory) {
+        UserInformation storage info = _userInformation[user];
+        return UserInformationLite(info.maturedBalance, info.maxBalance, info.mostMatureTxIndex, info.lastInTxIndex);
+    }
+
+    // Optimization for Balance Handler
+    function getMatureBalance(address user, uint256 index) external view returns (uint256 matureBalance) {
+        VestingTransaction memory vt = vestingTransactions[user][index];
+        return getMatureBalance(vt, block.timestamp);
+    }
+
+    // Optimization for `require` checks
+    modifier isGovernance() {
+        _isGovernance();
+        _;
+    }
+
+    function _isGovernance() private view {
+        require(msg.sender == governance, "!gov");
+    }
+
+
+    // Remaining for js tests only before refactor
+
+    function getTransactionDetail(VestingTransaction memory _tx) public view returns (VestingTransactionDetailed memory dtx) {
+       return getTransactionDetails(_tx, block.timestamp);
+    }
+
+    function userInformation(address user) external view returns (UserInformation memory) {
+        return _userInformation[user];
+    }
 }
