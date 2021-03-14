@@ -3,8 +3,6 @@
 pragma experimental ABIEncoderV2;
 pragma solidity ^0.7.6;
 
-import "../common/OVLTokenTypes.sol";
-
 interface IOVLTransferHandler {
-    function getTransactionDetail(VestingTransaction memory) external view returns (VestingTransactionDetailed memory);
+    function handleTransfer(address sender, address recipient, uint256 amount) external;
 }

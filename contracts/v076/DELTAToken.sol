@@ -10,12 +10,12 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import "../interfaces/IOVLBalanceHandler.sol";
 import "../interfaces/IOVLTransferHandler.sol";
+import "../interfaces/IOVLVestingCalculator.sol";
 import "../interfaces/IRebasingLiquidityToken.sol";
 import "../interfaces/IWETH.sol";
 
 import "../common/OVLBase.sol";
 import "../common/OVLTokenTypes.sol";
-import "../common/OVLVestingCalculator.sol";
 
 import "./OVLTransferHandler.sol";
 import "./OVLBalanceHandler.sol";
@@ -28,7 +28,7 @@ import "./preFirstRebasing/OVLLPRebasingBalanceHandler.sol";
 // This token is time lock guarded by 90% FoT which disappears after 2 weeks to 0%
 // balanceOf will return the spendable amount outside of the fee on transfer.
 
-contract DELTAToken is OVLBase, OVLVestingCalculator, Context, IERC20 {
+contract DELTAToken is OVLBase, Context, IERC20 {
     using SafeMath for uint256;
     using Address for address;
 
@@ -47,7 +47,6 @@ contract DELTAToken is OVLBase, OVLVestingCalculator, Context, IERC20 {
     uint256 private constant TOTAL_SUPPLY = 45_000_000e18;
 
     // Configuration
-    address public immutable uniswapDELTAxWETHPair;
     address private constant WETH_ADDRESS = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address private constant BURNER = 0xDeaDbeefdEAdbeefdEadbEEFdeadbeEFdEaDbeeF;
 
@@ -70,24 +69,25 @@ contract DELTAToken is OVLBase, OVLVestingCalculator, Context, IERC20 {
         governance = msg.sender; // TODO: Remove -- bypass !gov checks
 
         setNoVestingWhitelist(uniswapPair, true);
+        setNoVestingWhitelist(BURNER, true);
+        setNoVestingWhitelist(rebasingLP, true);
         setWhitelists(multisig, true, true, true);
 
         setFullSenderWhitelist(_lswAddress, true); // Nessesary for lsw because it doesnt just send to the pair
 
         governance = multisig;
 
-        uniswapDELTAxWETHPair = uniswapPair;
         rebasingLPAddress = rebasingLP;
         _provideInitialSupply(_lswAddress, TOTAL_SUPPLY); 
 
         // Set post first rebasing ones now into private variables
-        address transferHandler = address(new OVLTransferHandler());
+        address transferHandler = address(new OVLTransferHandler(uniswapPair));
         tokenTransferHandlerMain = transferHandler;
         tokenBalanceHandlerMain = address(new OVLBalanceHandler(IOVLTransferHandler(transferHandler), IERC20(uniswapPair))); 
         
         //Set pre rebasing ones as main ones
+        tokenTransferHandler = address(new OVLLPRebasingHandler(uniswapPair));
         tokenBalanceHandler = address(new OVLLPRebasingBalanceHandler()); 
-        tokenTransferHandler = address(new OVLLPRebasingHandler());
     }
 
     function activatePostFirstRebasingState() public isGovernance() {
@@ -168,6 +168,7 @@ contract DELTAToken is OVLBase, OVLVestingCalculator, Context, IERC20 {
     function changeRLPAddress(address newAddress) public {
         require(msg.sender == rebasingLPAddress, "DELTAToken: Only Rebasing LP contract can call this function");
         require(newAddress != address(0), "DELTAToken: Cannot set to 0 address");
+        setNoVestingWhitelist(newAddress, true);
         rebasingLPAddress = newAddress;
     }
 
@@ -181,7 +182,7 @@ contract DELTAToken is OVLBase, OVLVestingCalculator, Context, IERC20 {
     }
 
     function _transfer(address sender, address recipient, uint256 amount) internal virtual {
-        bytes memory callData = abi.encodeWithSignature("handleTransfer(address,address,uint256,address)", sender, recipient, amount, uniswapDELTAxWETHPair);
+        bytes memory callData = abi.encodeWithSelector(IOVLTransferHandler.handleTransfer.selector, sender, recipient, amount);
         (bool success, bytes memory result) = tokenTransferHandler.delegatecall(callData);
 
         if (!success) {
@@ -244,7 +245,7 @@ contract DELTAToken is OVLBase, OVLVestingCalculator, Context, IERC20 {
 
         for(uint256 i = 0; i < QTY_EPOCHS; i++) {
             uint256 amount = vestingTransactions[account][i].amount;
-            uint256 matureTxBalance = getMatureBalance(vestingTransactions[account][i], block.timestamp);
+            uint256 matureTxBalance = IOVLVestingCalculator(tokenBalanceHandler).getMatureBalance(vestingTransactions[account][i], block.timestamp);
             mature = mature.add(matureTxBalance);
             immature = immature.add(amount.sub(matureTxBalance));
         }
@@ -257,12 +258,6 @@ contract DELTAToken is OVLBase, OVLVestingCalculator, Context, IERC20 {
     function getUserInfo(address user) external view returns (UserInformationLite memory) {
         UserInformation storage info = _userInformation[user];
         return UserInformationLite(info.maturedBalance, info.maxBalance, info.mostMatureTxIndex, info.lastInTxIndex);
-    }
-
-    // Optimization for Balance Handler
-    function getMatureBalance(address user, uint256 index) external view returns (uint256 matureBalance) {
-        VestingTransaction memory vt = vestingTransactions[user][index];
-        return getMatureBalance(vt, block.timestamp);
     }
 
     // Optimization for `require` checks
@@ -279,7 +274,7 @@ contract DELTAToken is OVLBase, OVLVestingCalculator, Context, IERC20 {
     // Remaining for js tests only before refactor
 
     function getTransactionDetail(VestingTransaction memory _tx) public view returns (VestingTransactionDetailed memory dtx) {
-       return getTransactionDetails(_tx, block.timestamp);
+       return IOVLVestingCalculator(tokenBalanceHandler).getTransactionDetails(_tx, block.timestamp);
     }
 
     function userInformation(address user) external view returns (UserInformation memory) {

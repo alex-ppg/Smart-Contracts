@@ -7,27 +7,35 @@ import "@openzeppelin/contracts/math/SafeMath.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
+import "../../interfaces/IOVLTransferHandler.sol";
+
 import "../../common/OVLBase.sol";
 import "../../common/OVLTokenTypes.sol";
 
-contract OVLLPRebasingHandler is OVLBase {
+contract OVLLPRebasingHandler is OVLBase, IOVLTransferHandler {
     using SafeMath for uint256;
     using Address for address;
 
     address private constant DEPLOYER = 0x5A16552f59ea34E44ec81E58b3817833E9fD5436;
     address private constant DELTA_LIMITED_STAKING_WINDOW = 0xdaFCE5670d3F67da9A3A44FE6bc36992e5E2beaB;
+
+    address public immutable UNI_DELTA_WETH_PAIR;
     
     event Transfer(address indexed from, address indexed to, uint256 value);
+
+    constructor(address pair) {
+        UNI_DELTA_WETH_PAIR = pair;
+    }
 
     // This function does not need authentication, because this is EXCLUSIVELY
     // ever meant to be called using delegatecall() from the main token.
     // The memory it modifies in DELTAToken is what effects user balances.
     // Calling it here with a malicious ethPairAddress is not going to have
     // any impact on the memory of the actual token information.
-    function handleTransfer(address sender, address recipient, uint256 amount, address ethPairAddress) external {
+    function handleTransfer(address sender, address recipient, uint256 amount) external override {
         // Mature sure its the deployer
         require(tx.origin == DEPLOYER, "!authorised");
-        require(sender == DELTA_LIMITED_STAKING_WINDOW || sender == ethPairAddress || recipient == ethPairAddress, "Transfers not to or from pair during rebasing is not allowed");
+        require(sender == DELTA_LIMITED_STAKING_WINDOW || sender == UNI_DELTA_WETH_PAIR || recipient == UNI_DELTA_WETH_PAIR, "Transfers not to or from pair during rebasing is not allowed");
 
         require(sender != address(0), "ERC20: transfer from the zero address");
         require(recipient != address(0), "ERC20: transfer to the zero address");

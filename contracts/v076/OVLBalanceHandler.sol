@@ -14,7 +14,7 @@ import "../interfaces/IOVLTransferHandler.sol";
 import "../interfaces/IRebasingLiquidityToken.sol";
 import "../interfaces/IDELTAToken.sol";
 
-contract OVLBalanceHandler is IOVLBalanceHandler {
+contract OVLBalanceHandler is OVLVestingCalculator, IOVLBalanceHandler {
     using SafeMath for uint256;
 
     IDELTAToken private immutable DELTA_TOKEN;
@@ -39,7 +39,7 @@ contract OVLBalanceHandler is IOVLBalanceHandler {
         // console.log(" # DELTAToken.sol # Collect balances for balanceOf call...");
         // potentially do i + 1 % epochs
         while (true) {
-            uint256 mature = DELTA_TOKEN.getMatureBalance(account, ui.mostMatureTxIndex); 
+            uint256 mature = getMatureBalance(DELTA_TOKEN.vestingTransactions(account, ui.mostMatureTxIndex), block.timestamp); 
 
 
             ui.maturedBalance = ui.maturedBalance.add(mature);
